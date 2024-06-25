@@ -9,37 +9,24 @@ use polars_io::parquet::read::ParquetAsyncReader;
 #[cfg(feature = "parquet")]
 use polars_io::parquet::read::ParquetReader;
 #[cfg(all(feature = "parquet", feature = "async"))]
-use polars_io::pl_async::{get_runtime, with_concurrency_budget};
+use polars_io::pl_async::{ get_runtime, with_concurrency_budget };
 #[cfg(any(feature = "parquet", feature = "ipc"))]
-use polars_io::{utils::is_cloud_url, SerReader};
+use polars_io::{ utils::is_cloud_url, SerReader };
 
 use super::*;
 
 #[allow(unused_variables)]
 pub fn count_rows(paths: &Arc<[PathBuf]>, scan_type: &FileScan) -> PolarsResult<DataFrame> {
-    #[cfg(not(any(
-        feature = "parquet",
-        feature = "ipc",
-        feature = "json",
-        feature = "csv"
-    )))]
+    #[cfg(not(any(feature = "parquet", feature = "ipc", feature = "json", feature = "csv")))]
     {
         unreachable!()
     }
 
-    #[cfg(any(
-        feature = "parquet",
-        feature = "ipc",
-        feature = "json",
-        feature = "csv"
-    ))]
+    #[cfg(any(feature = "parquet", feature = "ipc", feature = "json", feature = "csv"))]
     {
         let count: PolarsResult<usize> = match scan_type {
             #[cfg(feature = "csv")]
-            FileScan::Csv {
-                options,
-                cloud_options,
-            } => {
+            FileScan::Csv { options, cloud_options } => {
                 let parse_options = options.get_parse_options();
                 let n_rows: PolarsResult<usize> = paths
                     .iter()
@@ -50,48 +37,44 @@ pub fn count_rows(paths: &Arc<[PathBuf]>, scan_type: &FileScan) -> PolarsResult<
                             parse_options.quote_char,
                             parse_options.comment_prefix.as_ref(),
                             parse_options.eol_char,
-                            options.has_header,
+                            options.has_header
                         )
                     })
                     .sum();
                 n_rows
-            },
+            }
             #[cfg(feature = "parquet")]
             FileScan::Parquet { cloud_options, .. } => {
                 count_rows_parquet(paths, cloud_options.as_ref())
-            },
+            }
             #[cfg(feature = "ipc")]
-            FileScan::Ipc {
-                options,
-                cloud_options,
-                metadata,
-            } => count_rows_ipc(
-                paths,
-                #[cfg(feature = "cloud")]
-                cloud_options.as_ref(),
-                metadata.as_ref(),
-            ),
+            FileScan::Ipc { options, cloud_options, metadata } =>
+                count_rows_ipc(
+                    paths,
+                    #[cfg(feature = "cloud")] cloud_options.as_ref(),
+                    metadata.as_ref()
+                ),
             #[cfg(feature = "json")]
             FileScan::NDJson { options } => count_rows_ndjson(paths),
-            FileScan::Anonymous { .. } => {
-                unreachable!()
-            },
+            FileScan::Anonymous { .. } => { unreachable!() }
         };
         let count = count?;
-        let count: IdxSize = count.try_into().map_err(
-            |_| polars_err!(ComputeError: "count of {} exceeded maximum row size", count),
-        )?;
+        let count: IdxSize = count
+            .try_into()
+            .map_err(
+                |_| polars_err!(ComputeError: "count of {} exceeded maximum row size", count)
+            )?;
         DataFrame::new(vec![Series::new(crate::constants::LEN, [count])])
     }
 }
 #[cfg(feature = "parquet")]
 pub(super) fn count_rows_parquet(
     paths: &Arc<[PathBuf]>,
-    cloud_options: Option<&CloudOptions>,
+    cloud_options: Option<&CloudOptions>
 ) -> PolarsResult<usize> {
     if paths.is_empty() {
         return Ok(0);
-    };
+    }
     let is_cloud = is_cloud_url(paths.first().unwrap().as_path());
 
     if is_cloud {
@@ -117,30 +100,32 @@ pub(super) fn count_rows_parquet(
 #[cfg(all(feature = "parquet", feature = "async"))]
 async fn count_rows_cloud_parquet(
     paths: &Arc<[PathBuf]>,
-    cloud_options: Option<&CloudOptions>,
+    cloud_options: Option<&CloudOptions>
 ) -> PolarsResult<usize> {
     let collection = paths.iter().map(|path| {
         with_concurrency_budget(1, || async {
-            let mut reader =
-                ParquetAsyncReader::from_uri(&path.to_string_lossy(), cloud_options, None, None)
-                    .await?;
+            use polars_io::prelude::ParquetAsyncReader;
+            let mut reader = ParquetAsyncReader::from_uri(
+                &path.to_string_lossy(),
+                cloud_options,
+                None,
+                None
+            ).await?;
             reader.num_rows().await
         })
     });
-    futures::future::try_join_all(collection)
-        .await
-        .map(|rows| rows.iter().sum())
+    futures::future::try_join_all(collection).await.map(|rows| rows.iter().sum())
 }
 
 #[cfg(feature = "ipc")]
 pub(super) fn count_rows_ipc(
     paths: &Arc<[PathBuf]>,
     #[cfg(feature = "cloud")] cloud_options: Option<&CloudOptions>,
-    metadata: Option<&arrow::io::ipc::read::FileMetadata>,
+    metadata: Option<&arrow::io::ipc::read::FileMetadata>
 ) -> PolarsResult<usize> {
     if paths.is_empty() {
         return Ok(0);
-    };
+    }
     let is_cloud = is_cloud_url(paths.first().unwrap().as_path());
 
     if is_cloud {
@@ -166,7 +151,7 @@ pub(super) fn count_rows_ipc(
 async fn count_rows_cloud_ipc(
     paths: &Arc<[PathBuf]>,
     cloud_options: Option<&CloudOptions>,
-    metadata: Option<&arrow::io::ipc::read::FileMetadata>,
+    metadata: Option<&arrow::io::ipc::read::FileMetadata>
 ) -> PolarsResult<usize> {
     use polars_io::ipc::IpcReaderAsync;
 
@@ -176,9 +161,12 @@ async fn count_rows_cloud_ipc(
             reader.count_rows(metadata).await
         })
     });
-    futures::future::try_join_all(collection)
-        .await
-        .map(|rows| rows.iter().map(|v| *v as usize).sum())
+    futures::future::try_join_all(collection).await.map(|rows|
+        rows
+            .iter()
+            .map(|v| *v as usize)
+            .sum()
+    )
 }
 
 #[cfg(feature = "json")]
